@@ -19,6 +19,37 @@ $checksums = Join-Path $artifactRoot 'SHA256SUMS.txt'
 $projectFull = [IO.Path]::GetFullPath($projectRoot)
 $artifactFull = [IO.Path]::GetFullPath($artifactRoot)
 
+function Assert-ZipLayout {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ZipPath,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$RequiredRootFiles
+    )
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $entryNames = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+    }
+    finally {
+        $archive.Dispose()
+    }
+
+    foreach ($requiredFile in $RequiredRootFiles) {
+        if ($entryNames -notcontains $requiredFile) {
+            throw "Release archive does not expose '$requiredFile' at its top level: $ZipPath"
+        }
+    }
+    if (-not ($entryNames | Where-Object { $_.StartsWith('_internal/', [StringComparison]::OrdinalIgnoreCase) })) {
+        throw "Release archive is missing the top-level _internal directory: $ZipPath"
+    }
+    if ($entryNames | Where-Object { $_.StartsWith('CodexProxyAssistant/', [StringComparison]::OrdinalIgnoreCase) }) {
+        throw "Release archive contains an unnecessary CodexProxyAssistant wrapper directory: $ZipPath"
+    }
+}
+
 if (-not $artifactFull.StartsWith($projectFull + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Refusing to manage artifacts outside the project: $artifactFull"
 }
@@ -41,8 +72,15 @@ Copy-Item -LiteralPath (Join-Path $packageRoot 'build-manifest.json') -Destinati
 
 Copy-Item -Path (Join-Path $packageRoot '*') -Destination $fullRoot -Recurse
 
-Compress-Archive -LiteralPath $minimalRoot -DestinationPath $minimalZip -CompressionLevel Optimal
-Compress-Archive -LiteralPath $fullRoot -DestinationPath $fullZip -CompressionLevel Optimal
+Compress-Archive -Path (Join-Path $minimalRoot '*') -DestinationPath $minimalZip -CompressionLevel Optimal
+Compress-Archive -Path (Join-Path $fullRoot '*') -DestinationPath $fullZip -CompressionLevel Optimal
+Assert-ZipLayout -ZipPath $minimalZip -RequiredRootFiles @('CodexProxyAssistant.exe', 'build-manifest.json')
+Assert-ZipLayout -ZipPath $fullZip -RequiredRootFiles @(
+    'CodexProxyAssistant.exe',
+    'build-manifest.json',
+    'README.md',
+    'codex-vpn-repair.cmd'
+)
 Copy-Item -LiteralPath (Join-Path $projectRoot 'codex-vpn-repair.cmd') -Destination $standaloneCmd
 
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force

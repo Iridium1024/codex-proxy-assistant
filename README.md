@@ -10,8 +10,8 @@
 
 | 文件 | 适合人群 | 说明 |
 | --- | --- | --- |
-| `CodexProxyAssistant-v0.5.1-windows-x64.zip` | 缺少相关经验的用户（推荐） | 完整免安装程序包。解压后运行 `CodexProxyAssistant.exe`。 |
-| `CodexProxyAssistant-v0.5.1-minimal.zip` | 希望获得最小运行目录的用户 | 只包含 GUI 程序运行所必需的文件。 |
+| `CodexProxyAssistant-v0.5.2-windows-x64.zip` | 缺少相关经验的用户（推荐） | 完整免安装程序包。解压后第一层即可看到并运行 `CodexProxyAssistant.exe`。 |
+| `CodexProxyAssistant-v0.5.2-minimal.zip` | 希望获得最小运行目录的用户 | 只包含 GUI 程序运行所必需的文件，解压后第一层即可看到 EXE。 |
 | `codex-vpn-repair.cmd` | 熟悉命令行和配置文件的用户 | 单文件脚本，不依赖 Python 或第三方模块。 |
 | `SHA256SUMS.txt` | 需要校验下载完整性的用户 | 包含所有发布文件的 SHA-256。 |
 
@@ -19,7 +19,7 @@
 
 ## 图形程序使用方法
 
-1. 解压 `CodexProxyAssistant-v0.5.1-windows-x64.zip`，不要只把 EXE 单独拖出压缩包。
+1. 完整解压 `CodexProxyAssistant-v0.5.2-windows-x64.zip`；解压后的第一层即可看到 `CodexProxyAssistant.exe`，不要只把 EXE 单独拖出压缩包。
 2. 打开 `CodexProxyAssistant.exe`。程序启动后会自动读取 Codex、系统代理和配置状态。
 3. 检查自动识别的 Codex 路径与系统代理；如有需要，可手动选择或输入后重新检测。
 4. 点击“预览修改”查看计划。此步骤不会写入文件。
@@ -92,7 +92,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -CleanW
 生成 GitHub 发布包：
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\package_github_release.ps1 -Version 0.5.1
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\package_github_release.ps1 -Version 0.5.2
 ```
 
 核心与 GUI 测试：
