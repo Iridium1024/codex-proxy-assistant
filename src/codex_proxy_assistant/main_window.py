@@ -58,8 +58,30 @@ BACKEND_TEXT = {
     "Windows system proxy, PAC, or WPAD is not enabled.": "Windows 系统代理、PAC 或自动发现均未启用。",
     "The configured Windows proxy port is not reachable.": "Windows 当前代理端口不可达。",
     "The proxy entered in the UI is invalid or unreachable.": "输入的代理地址无效或端口不可达。",
+    "The configured Windows proxy is not an HTTP or HTTPS proxy supported by persistent repair.": "Windows 当前代理不是持久修复正式支持的 HTTP/HTTPS 代理。",
+    "The configured Windows proxy did not pass the HTTPS route test.": "Windows 当前代理未通过 HTTPS 链路验证。",
+    "The proxy entered in the UI is not an HTTP or HTTPS proxy supported by persistent repair.": "输入的代理不是持久修复正式支持的 HTTP/HTTPS 代理。",
+    "The proxy entered in the UI did not pass the HTTPS route test.": "输入的代理未通过 HTTPS 链路验证。",
+    "PAC or WPAD is detected; static HTTPS endpoint validation is not available and Codex will resolve it at runtime.": "已检测到 PAC/WPAD；静态 HTTPS 端点无法直接验证，将由 Codex 在运行时解析。",
     "The entered proxy differs from the Windows system proxy; persistent repair would not use it.": "输入地址与 Windows 系统代理不同，不能用于持久修复。",
     "Proxy URLs containing a user name or password are not accepted.": "不接受包含用户名或密码的代理地址。",
+    "Enter the HTTP or Mixed proxy port shown by the proxy application.": "请输入代理软件显示的 HTTP/Mixed 端口。",
+    "Use an HTTP or Mixed proxy port. SOCKS is recognized only for limited temporary use.": "请使用 HTTP/Mixed 端口；SOCKS 仅作为有限的临时支持。",
+    "Start the proxy application or verify its HTTP or Mixed port, then retry.": "请启动代理软件，或核对 HTTP/Mixed 端口后重试。",
+    "Verify that the selected port is the HTTP or Mixed proxy port and that the current node can reach HTTPS sites.": "请确认所选的是 HTTP/Mixed 端口，并检查当前节点能否访问 HTTPS。",
+    "Check the current proxy node and retry, or switch to another node.": "请检查当前代理节点并重试，或切换节点。",
+    "Confirm that the proxy application is running and the selected port is correct.": "请确认代理软件正在运行且端口正确。",
+    "The connection was interrupted; verify the HTTP or Mixed port and switch proxy nodes if needed.": "连接被中断；请核对 HTTP/Mixed 端口，必要时切换节点。",
+}
+
+TARGET_KIND_TEXT = {"desktop": "Codex Desktop", "cli": "Codex CLI"}
+TARGET_SOURCE_TEXT = {
+    "user_selected": "手动选择",
+    "appx": "Microsoft Store",
+    "running_process": "正在运行的程序",
+    "standard_path": "标准安装位置",
+    "npm": "npm",
+    "path": "PATH",
 }
 
 
@@ -89,6 +111,7 @@ class MainWindow(QMainWindow):
         self.thread_pool = QThreadPool.globalInstance()
         self.report: dict[str, Any] | None = None
         self.busy = False
+        self.recommended_next_step = "就绪"
         self._focus_before_busy: QPushButton | None = None
         self._build_ui()
         self._set_ready_state()
@@ -109,7 +132,8 @@ class MainWindow(QMainWindow):
 
         feedback_row = QGridLayout()
         feedback_row.setContentsMargins(13, 0, 13, 0)
-        feedback_row.setHorizontalSpacing(4)
+        # Keep the five-column feedback row aligned to the equal-width action buttons.
+        feedback_row.setHorizontalSpacing(3)
         self.log_title = QLabel("运行日志")
         self.log_title.setStyleSheet("font-weight: 600; font-size: 14px;")
         self.log_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -123,8 +147,8 @@ class MainWindow(QMainWindow):
         self.progress_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         feedback_row.addWidget(self.log_title, 0, 0)
         feedback_row.addWidget(self.progress_label, 0, 1)
-        feedback_row.addWidget(self.progress_bar, 0, 2, 1, 2)
-        for column in range(4):
+        feedback_row.addWidget(self.progress_bar, 0, 2, 1, 3)
+        for column in range(5):
             feedback_row.setColumnStretch(column, 1)
         layout.addLayout(feedback_row)
 
@@ -161,6 +185,7 @@ class MainWindow(QMainWindow):
         self.codex_combo.setMaxVisibleItems(7)
         self.codex_combo.setItemDelegate(ComboItemDelegate(self.codex_combo))
         self.codex_combo.view().setTextElideMode(Qt.ElideMiddle)
+        self.codex_combo.currentIndexChanged.connect(self._selected_target_changed)
         combo_frame_layout.addWidget(self.codex_combo)
         grid.addWidget(self.codex_combo_frame, 0, 1)
         self.browse_button = QPushButton("...")
@@ -179,7 +204,7 @@ class MainWindow(QMainWindow):
 
         grid.addWidget(QLabel("系统代理："), 2, 0)
         self.proxy_edit = QLineEdit()
-        self.proxy_edit.setPlaceholderText("例如：http://127.0.0.1:7897")
+        self.proxy_edit.setPlaceholderText("例如：http://127.0.0.1:XXXX")
         self.proxy_edit.setTextMargins(FIELD_TEXT_MARGIN, 0, FIELD_TEXT_MARGIN, 0)
         self.proxy_edit.setFixedHeight(CONTROL_HEIGHT)
         grid.addWidget(self.proxy_edit, 2, 1, 1, 2)
@@ -222,24 +247,31 @@ class MainWindow(QMainWindow):
         self.restore_button.clicked.connect(self.restore_snapshot)
         grid.addWidget(self.restore_button, 5, 3)
 
-        actions = QGridLayout()
+        actions = QHBoxLayout()
         actions.setContentsMargins(0, 3, 0, 0)
-        actions.setHorizontalSpacing(8)
+        actions.setSpacing(8)
         self.auto_button = QPushButton("自动检测")
         self.auto_button.clicked.connect(self.auto_detect)
-        self.trial_button = QPushButton("临时代理试运行（CLI）")
+        self.trial_button = QPushButton("临时 CLI 试运行")
         self.trial_button.clicked.connect(self.temporary_trial)
         self.preview_button = QPushButton("预览修改")
         self.preview_button.clicked.connect(self.preview_repair)
         self.apply_button = QPushButton("应用持久修复")
         self.apply_button.clicked.connect(self.apply_repair)
-        for column, button in enumerate(
-            (self.auto_button, self.trial_button, self.preview_button, self.apply_button)
-        ):
+        self.connection_button = QPushButton("验证实际连接")
+        self.connection_button.clicked.connect(self.test_real_connection)
+        action_buttons = (
+            self.auto_button,
+            self.trial_button,
+            self.preview_button,
+            self.connection_button,
+            self.apply_button,
+        )
+        for button in action_buttons:
             button.setFixedHeight(CONTROL_HEIGHT)
             button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-            actions.addWidget(button, 0, column)
-            actions.setColumnStretch(column, 1)
+            button.setMinimumWidth(0)
+            actions.addWidget(button, 1)
 
         grid.addLayout(actions, 6, 0, 1, 4)
         grid.setColumnStretch(1, 1)
@@ -255,6 +287,7 @@ class MainWindow(QMainWindow):
         self.trial_button.setEnabled(False)
         self.preview_button.setEnabled(False)
         self.apply_button.setEnabled(False)
+        self.connection_button.setEnabled(False)
         self.restore_button.setEnabled(False)
 
     def _set_busy(self, busy: bool, message: str = "") -> None:
@@ -271,6 +304,7 @@ class MainWindow(QMainWindow):
             self.trial_button,
             self.preview_button,
             self.apply_button,
+            self.connection_button,
             self.restore_button,
         ):
             button.setEnabled(not busy)
@@ -280,7 +314,8 @@ class MainWindow(QMainWindow):
         else:
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
-            self.progress_label.setText("就绪")
+            self.progress_label.setText(self.recommended_next_step)
+            self.progress_label.setToolTip(self.recommended_next_step)
             self._refresh_button_state()
             QTimer.singleShot(0, self._restore_previous_focus)
 
@@ -296,7 +331,22 @@ class MainWindow(QMainWindow):
         self.trial_button.setEnabled(path_ok and proxy_ok and not self.busy)
         self.preview_button.setEnabled(path_ok and not self.busy)
         self.apply_button.setEnabled(path_ok and not self.busy)
+        self.connection_button.setEnabled(path_ok and not self.busy)
         self.restore_button.setEnabled(path_ok and not self.busy)
+
+        if not path_ok:
+            missing_tip = "尚未找到 Codex；请先自动检测或手动选择路径。"
+            self.preview_button.setToolTip(missing_tip)
+            self.apply_button.setToolTip(missing_tip)
+            self.connection_button.setToolTip(missing_tip)
+        else:
+            self.preview_button.setToolTip("查看将要修改的配置和当前执行条件。")
+            self.connection_button.setToolTip("主动发送一个最小真实请求；会使用当前登录状态并可能消耗少量额度。")
+        self.trial_button.setToolTip(
+            "使用当前代理仅启动一次 CLI，不写入配置。"
+            if path_ok and proxy_ok
+            else "临时 CLI 试运行需要 Codex 路径和已填写的代理地址。"
+        )
 
         state = str(((self.report or {}).get("config") or {}).get("feature_state") or "missing")
         if state == "true":
@@ -349,16 +399,21 @@ class MainWindow(QMainWindow):
     def _apply_detection_report(self, report: dict[str, Any]) -> None:
         self.report = report
         engines = report.get("engines") or []
-        installation_sources = {item.get("path"): item.get("source") for item in report.get("installations") or []}
         self.codex_combo.blockSignals(True)
         self.codex_combo.clear()
         for engine in engines:
             path = str(engine.get("path") or "")
             if not path:
                 continue
-            source = installation_sources.get(path, "detected")
+            source = str(engine.get("source") or "path")
             self.codex_combo.addItem(path, {"engine": engine, "source": source})
-            self.codex_combo.setItemData(self.codex_combo.count() - 1, f"{engine.get('version')} · {source}", Qt.ToolTipRole)
+            kind_text = TARGET_KIND_TEXT.get(str(engine.get("kind")), "Codex")
+            source_text = TARGET_SOURCE_TEXT.get(source, source)
+            self.codex_combo.setItemData(
+                self.codex_combo.count() - 1,
+                f"{kind_text} · {engine.get('version')} · {source_text}",
+                Qt.ToolTipRole,
+            )
         recommended = str(report.get("recommended_path") or "")
         if recommended:
             index = self.codex_combo.findText(recommended)
@@ -368,28 +423,40 @@ class MainWindow(QMainWindow):
                 self.codex_combo.setEditText(recommended)
         self.codex_combo.blockSignals(False)
 
-        selected = next((e for e in engines if e.get("path") == recommended), None)
-        if selected and selected.get("supports_system_proxy"):
-            self._set_label_state(
-                self.codex_status,
-                f"{selected.get('version')} · 已确认支持 respect_system_proxy",
-                "ok",
-            )
-        elif selected:
-            self._set_label_state(self.codex_status, "已找到 Codex，但未确认代理功能支持。", "warn")
-        else:
-            self._set_label_state(self.codex_status, "未找到可验证的 Codex 引擎。", "error")
+        selected = report.get("recommended") or next(
+            (e for e in engines if e.get("path") == recommended), None
+        )
+        self._show_selected_target_status(selected)
+        for skipped in report.get("skipped") or []:
+            path = str(skipped.get("path") or "未知路径")
+            if skipped.get("error_class") == "probe_timeout":
+                self.log(f"一个 Codex 候选检测超时，已跳过：{path}", level="warn")
+            elif skipped.get("error"):
+                self.log(f"一个 Codex 候选无法验证，已跳过：{path}", level="warn")
 
         proxy = report.get("proxy") or {}
         endpoint = str(proxy.get("display_endpoint") or "")
         if endpoint:
             self.proxy_edit.setText(endpoint)
-        if proxy.get("configured") and proxy.get("tcp_reachable") is not False:
-            description = {"manual": "系统手工代理", "pac": "PAC", "wpad": "WPAD"}.get(proxy.get("source"), "系统代理")
-            suffix = " · TCP 可达" if proxy.get("tcp_reachable") is True else ""
-            self._set_label_state(self.proxy_status, f"{description}{suffix}", "ok")
-        elif proxy.get("configured"):
+        if proxy.get("source") in {"pac", "wpad"}:
+            description = "PAC" if proxy.get("source") == "pac" else "WPAD"
+            self._set_label_state(
+                self.proxy_status,
+                f"已检测到 {description} · 尚未完成静态端点验证，将由 Codex 运行时解析",
+                "warn",
+            )
+        elif proxy.get("configured") and proxy.get("https_reachable") is True:
+            suffix = " · 使用兼容的证书吊销回退" if proxy.get("used_ssl_no_revoke") else ""
+            self._set_label_state(self.proxy_status, f"系统手工代理 · 可访问 HTTPS{suffix}", "ok")
+        elif proxy.get("configured") and proxy.get("tcp_reachable") is False:
             self._set_label_state(self.proxy_status, "系统代理已配置，但端口不可达。", "error")
+        elif proxy.get("configured"):
+            next_step = str(proxy.get("next_step") or "请确认使用代理软件的 HTTP/Mixed 端口。")
+            self._set_label_state(
+                self.proxy_status,
+                f"代理端口已开放，但 HTTPS 验证失败；{localize_backend_text(next_step)}",
+                "error",
+            )
         else:
             self._set_label_state(self.proxy_status, "未检测到 Windows 系统代理、PAC 或 WPAD。", "warn")
 
@@ -397,13 +464,81 @@ class MainWindow(QMainWindow):
         self.config_path_edit.setText(str(config.get("path") or ""))
         state = str(config.get("feature_state") or "missing")
         role = "ok" if state == "true" else ("error" if state.startswith("invalid-") else "warn")
-        self._set_label_state(self.config_state_label, f"状态：{STATE_TEXT.get(state, state)}", role)
+        config_summary = (
+            "无需修改"
+            if state == "true"
+            else ("需人工检查" if state.startswith("invalid-") else "可应用修复")
+        )
+        self._set_label_state(self.config_state_label, f"状态：{config_summary}", role)
         self._populate_snapshots(report.get("snapshots") or [])
+        self.recommended_next_step = self._recommended_step(selected, proxy, state)
         self._refresh_button_state()
         self.log(
             f"自动检测完成：Codex 候选 {len(engines)} 个，配置状态 {STATE_TEXT.get(state, state)}。",
             level="ok",
         )
+
+    @staticmethod
+    def _recommended_step(
+        selected: dict[str, Any] | None, proxy: dict[str, Any], config_state: str
+    ) -> str:
+        if not selected:
+            return "下一步：安装或选择 Codex"
+        if not selected.get("supports_system_proxy"):
+            return "下一步：更新或改选 Codex"
+        if not proxy.get("configured"):
+            return "下一步：开启系统代理"
+        if proxy.get("source") == "manual" and proxy.get("tcp_reachable") is False:
+            return "下一步：启动代理软件"
+        if proxy.get("source") == "manual" and proxy.get("https_reachable") is not True:
+            return "下一步：选择 HTTP/Mixed 端口"
+        if config_state.startswith("invalid-"):
+            return "下一步：人工检查配置"
+        if config_state == "true":
+            return "下一步：重启 Codex 或验证连接"
+        return "下一步：预览并应用修复"
+
+    def _selected_target_changed(self) -> None:
+        data = self.codex_combo.currentData()
+        engine = data.get("engine") if isinstance(data, dict) else None
+        if engine:
+            self._show_selected_target_status(engine)
+        self._refresh_button_state()
+
+    def _show_selected_target_status(self, engine: dict[str, Any] | None) -> None:
+        if not engine:
+            self._set_label_state(
+                self.codex_status,
+                "未找到 Codex；请安装或更新后重试，也可手动选择路径。",
+                "error",
+            )
+            return
+        kind_text = TARGET_KIND_TEXT.get(str(engine.get("kind")), "Codex")
+        version = str(engine.get("version") or "版本未知")
+        if engine.get("timed_out"):
+            self._set_label_state(
+                self.codex_status,
+                f"当前目标：{kind_text} · 检测超时，已跳过；可重新检测或改选其他安装。",
+                "warn",
+            )
+        elif engine.get("supports_system_proxy"):
+            self._set_label_state(
+                self.codex_status,
+                f"当前目标：{kind_text} · {version} · 支持系统代理",
+                "ok",
+            )
+        elif engine.get("runnable"):
+            self._set_label_state(
+                self.codex_status,
+                f"当前目标：{kind_text} · {version} · 请更新 Codex 以支持系统代理",
+                "warn",
+            )
+        else:
+            self._set_label_state(
+                self.codex_status,
+                f"当前目标：{kind_text} · 无法验证；请重新选择或重新检测。",
+                "error",
+            )
 
     def _populate_snapshots(self, snapshots: list[dict[str, Any]]) -> None:
         self.snapshot_combo.clear()
@@ -429,10 +564,22 @@ class MainWindow(QMainWindow):
 
     def _show_codex_result(self, info: dict[str, Any]) -> None:
         if info.get("supports_system_proxy"):
-            self._set_label_state(self.codex_status, f"{info.get('version')} · 路径及代理功能有效", "ok")
+            kind_text = TARGET_KIND_TEXT.get(str(info.get("kind")), "Codex")
+            self._set_label_state(
+                self.codex_status,
+                f"当前目标：{kind_text} · {info.get('version')} · 支持系统代理",
+                "ok",
+            )
             self.log("Codex 路径检测通过。", level="ok")
         else:
-            message = str(info.get("error") or "未确认 respect_system_proxy 支持。")
+            if info.get("error_class") == "probe_timeout":
+                message = "所选 Codex 检测超时；请重试或重新选择路径。"
+            elif info.get("error_class") == "path_missing":
+                message = "所选路径已失效；请重新选择或运行自动检测。"
+            elif info.get("runnable"):
+                message = "已找到 Codex，但当前版本不支持系统代理，请更新后重试。"
+            else:
+                message = str(info.get("error") or "无法验证所选 Codex。")
             self._set_label_state(self.codex_status, message, "error")
             self.log(message, level="error")
         self._refresh_button_state()
@@ -446,13 +593,26 @@ class MainWindow(QMainWindow):
         self._run_task("正在检测代理...", lambda: self.backend.check_proxy(endpoint), self._show_proxy_result)
 
     def _show_proxy_result(self, info: dict[str, Any]) -> None:
-        if info.get("valid") and info.get("tcp_reachable"):
+        if info.get("valid") and info.get("https_reachable") is True:
             match_text = " · 与系统代理一致" if info.get("matches_system") else " · 与系统代理不同，仅可临时试运行"
             self.proxy_edit.setText(str(info.get("normalized") or self.proxy_edit.text()))
-            self._set_label_state(self.proxy_status, f"代理端口可达{match_text}", "ok" if info.get("matches_system") else "warn")
-            self.log("代理检测通过。", level="ok")
+            support_text = "" if info.get("persistent_supported") else " · SOCKS 为有限支持"
+            self._set_label_state(
+                self.proxy_status,
+                f"代理可访问 HTTPS{match_text}{support_text}",
+                "ok" if info.get("matches_system") and info.get("persistent_supported") else "warn",
+            )
+            self.log("代理 HTTPS 链路验证通过。", level="ok")
+        elif info.get("tcp_reachable"):
+            message = str(info.get("next_step") or info.get("error") or "端口已开放，但无法作为 HTTPS 代理使用。")
+            self._set_label_state(
+                self.proxy_status,
+                f"端口已开放，但 HTTPS 验证失败；{localize_backend_text(message)}",
+                "error",
+            )
+            self.log("端口已开放，但未通过 HTTPS 代理验证。", level="error")
         else:
-            message = str(info.get("error") or "代理端口不可达。")
+            message = localize_backend_text(info.get("error") or "代理端口不可达。")
             self._set_label_state(self.proxy_status, message, "error")
             self.log(message, level="error")
         self._refresh_button_state()
@@ -522,6 +682,14 @@ class MainWindow(QMainWindow):
                 "Windows 系统代理端口当前不可达，请检查 VPN 或代理软件后重试。",
             )
             return
+        if system_proxy.get("source") == "manual" and system_proxy.get("https_reachable") is not True:
+            QMessageBox.warning(
+                self,
+                "系统代理未通过 HTTPS 验证",
+                "代理端口虽然可能已开放，但尚不能确认它能转发 HTTPS。\n"
+                "请在代理软件中选择 HTTP/Mixed 端口并重新检测。",
+            )
+            return
         answer = QMessageBox.question(
             self,
             "确认持久修改",
@@ -550,8 +718,59 @@ class MainWindow(QMainWindow):
         snapshot = result.get("snapshot_id")
         if snapshot:
             self.log(f"已创建配置快照：{snapshot}")
-        QMessageBox.information(self, "修复完成", "Codex 配置已写入并验证。\n请完全退出并重启 Codex 后使用。")
+        proxy_ok = ((self.report or {}).get("proxy") or {}).get("https_reachable") is True
+        QMessageBox.information(
+            self,
+            "修复完成",
+            "配置已写入并被 Codex 读取：是\n"
+            f"代理 HTTPS 检测：{'成功' if proxy_ok else '尚未确认'}\n"
+            "Codex 实际请求：尚未验证\n\n"
+            "请完全退出并重启 Codex；如需进一步确认，可主动点击“验证实际连接”。",
+        )
         QTimer.singleShot(100, self.auto_detect)
+
+    def test_real_connection(self) -> None:
+        path = self.codex_combo.currentText().strip()
+        if not path:
+            QMessageBox.warning(self, "缺少路径", "请先选择或检测 Codex。")
+            return
+        answer = QMessageBox.question(
+            self,
+            "确认验证实际连接",
+            "此操作会使用当前 Codex 登录状态发送一个最小、无工具的临时请求，"
+            "可能消耗少量 Codex 额度。\n不会修改配置。是否继续？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.log("用户已确认，开始执行最小 Codex 实际连接验证。")
+        self._run_task(
+            "正在验证实际连接...",
+            lambda: self.backend.test_connection(path),
+            self._show_connection_result,
+        )
+
+    def _show_connection_result(self, result: dict[str, Any]) -> None:
+        if result.get("success"):
+            self.log("Codex 最小实际请求成功。", level="ok")
+            QMessageBox.information(
+                self,
+                "连接验证成功",
+                "配置读取：已验证\n代理 HTTPS：请参见代理状态\nCodex 实际请求：成功",
+            )
+            return
+        if not result.get("attempted"):
+            message = "当前 Codex 不支持可靠的非交互验证；配置状态不受影响，未发送真实请求。"
+        elif result.get("timed_out"):
+            message = "实际请求超时，相关进程已终止。配置不会因此自动回滚。"
+        else:
+            message = (
+                "实际请求未成功。配置不会自动回滚；请检查账号、代理节点、服务状态，"
+                "或 Desktop 的附属连接。"
+            )
+        self.log(message, level="warn")
+        QMessageBox.warning(self, "连接尚未确认", message)
 
     def temporary_trial(self) -> None:
         path, proxy = self._current_inputs()
@@ -561,10 +780,10 @@ class MainWindow(QMainWindow):
 
         def launch() -> dict[str, Any]:
             info = self.backend.check_proxy(proxy)
-            if not info.get("valid") or not info.get("tcp_reachable"):
-                raise RuntimeError(str(info.get("error") or "代理端口不可达。"))
+            if not info.get("valid") or info.get("https_reachable") is not True:
+                raise RuntimeError(str(info.get("next_step") or info.get("error") or "代理未通过 HTTPS 验证。"))
             if info.get("has_credentials"):
-                raise RuntimeError("初版临时试运行不接受包含用户名或密码的代理 URL。")
+                raise RuntimeError("临时试运行不支持包含用户名或密码的代理 URL。")
             pid = launch_temporary_codex(path, str(info.get("normalized") or proxy))
             return {"pid": pid, "proxy": info.get("display_endpoint")}
 

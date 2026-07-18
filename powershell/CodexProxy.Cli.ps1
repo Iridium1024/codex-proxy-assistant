@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('detect', 'check-codex', 'check-proxy', 'plan', 'apply', 'list-snapshots', 'restore')]
+    [ValidateSet('detect', 'check-codex', 'check-proxy', 'test-connection', 'plan', 'apply', 'list-snapshots', 'restore')]
     [string]$Action,
     [string]$CodexPath,
     [string]$ProxyEndpoint,
@@ -25,6 +25,10 @@ try {
         'check-proxy' {
             if ([string]::IsNullOrWhiteSpace($ProxyEndpoint)) { throw 'ProxyEndpoint is required.' }
             $data = Test-ProxyInput -Endpoint $ProxyEndpoint
+        }
+        'test-connection' {
+            if ([string]::IsNullOrWhiteSpace($CodexPath)) { throw 'CodexPath is required.' }
+            $data = Test-CodexConnection -CodexPath $CodexPath
         }
         'plan' {
             $data = Get-RepairPlan -CodexPath $CodexPath -ProxyEndpoint $ProxyEndpoint -ConfigPath $ConfigPath

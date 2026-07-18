@@ -65,18 +65,31 @@ class PowerShellBackend:
             if value:
                 command.extend([switch, value])
 
-        completed = subprocess.run(
+        process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=timeout,
-            check=False,
             **self._startup_options(),
         )
-        stdout = completed.stdout.decode("utf-8-sig", errors="replace").strip()
-        stderr = completed.stderr.decode("utf-8-sig", errors="replace").strip()
+        try:
+            stdout_bytes, stderr_bytes = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    **self._startup_options(),
+                )
+            else:
+                process.kill()
+            process.communicate()
+            raise BackendError("后端操作超时，相关进程已终止；请重试或检查所选程序。") from exc
+        stdout = stdout_bytes.decode("utf-8-sig", errors="replace").strip()
+        stderr = stderr_bytes.decode("utf-8-sig", errors="replace").strip()
         if not stdout:
-            raise BackendError(stderr or f"后端没有返回结果（退出码 {completed.returncode}）")
+            raise BackendError(stderr or f"后端没有返回结果（退出码 {process.returncode}）")
         try:
             envelope = json.loads(stdout.splitlines()[-1])
         except json.JSONDecodeError as exc:
@@ -94,6 +107,9 @@ class PowerShellBackend:
     def check_proxy(self, endpoint: str) -> dict[str, Any]:
         return self.call("check-proxy", proxy_endpoint=endpoint)
 
+    def test_connection(self, path: str) -> dict[str, Any]:
+        return self.call("test-connection", codex_path=path, timeout=40)
+
     def plan(self, codex_path: str, proxy_endpoint: str | None) -> dict[str, Any]:
         return self.call("plan", codex_path=codex_path, proxy_endpoint=proxy_endpoint)
 
@@ -102,6 +118,19 @@ class PowerShellBackend:
 
     def restore(self, snapshot_id: str, codex_path: str) -> dict[str, Any]:
         return self.call("restore", snapshot_id=snapshot_id, codex_path=codex_path)
+
+
+def merge_no_proxy(*values: str | None) -> str:
+    entries: list[str] = []
+    seen: set[str] = set()
+    for value in (*values, "localhost,127.0.0.1,::1"):
+        for item in str(value or "").split(","):
+            normalized = item.strip()
+            key = normalized.casefold()
+            if normalized and key not in seen:
+                seen.add(key)
+                entries.append(normalized)
+    return ",".join(entries)
 
 
 def launch_temporary_codex(codex_path: str, proxy_endpoint: str) -> int:
@@ -114,6 +143,9 @@ def launch_temporary_codex(codex_path: str, proxy_endpoint: str) -> int:
     env = os.environ.copy()
     for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
         env[name] = proxy_endpoint
+    no_proxy = merge_no_proxy(env.get("NO_PROXY"), env.get("no_proxy"))
+    env["NO_PROXY"] = no_proxy
+    env["no_proxy"] = no_proxy
 
     creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0) if os.name == "nt" else 0
     if path.suffix.lower() in {".cmd", ".bat"}:
