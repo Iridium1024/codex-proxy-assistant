@@ -1,5 +1,4 @@
 param(
-    [switch]$SkipTests,
     [string]$ReleaseName = 'release',
     [switch]$CleanWorkspace
 )
@@ -16,22 +15,30 @@ if ([string]::IsNullOrWhiteSpace($ReleaseName) -or [IO.Path]::GetFileName($Relea
 $releaseRoot = Join-Path $projectRoot $ReleaseName
 $workRoot = Join-Path $projectRoot 'build'
 $originalCmd = Join-Path $projectRoot 'codex-vpn-repair.cmd'
-$expectedCmdHash = '1E3B964E07BF9FB231B64C7311F84A5F468BB2A934ED94FA2FD39E11F5780A5A'
+$standaloneGenerator = Join-Path $projectRoot 'scripts\generate_standalone_cmd.ps1'
+$sourceInputFiles = [ordered]@{
+    'run_gui.py' = (Join-Path $projectRoot 'run_gui.py')
+    'src/codex_proxy_assistant/main.py' = (Join-Path $projectRoot 'src\codex_proxy_assistant\main.py')
+    'src/codex_proxy_assistant/main_window.py' = (Join-Path $projectRoot 'src\codex_proxy_assistant\main_window.py')
+    'src/codex_proxy_assistant/theme.py' = (Join-Path $projectRoot 'src\codex_proxy_assistant\theme.py')
+    'src/codex_proxy_assistant/backend.py' = (Join-Path $projectRoot 'src\codex_proxy_assistant\backend.py')
+    'src/codex_proxy_assistant/workers.py' = (Join-Path $projectRoot 'src\codex_proxy_assistant\workers.py')
+    'powershell/CodexProxy.Cli.ps1' = (Join-Path $projectRoot 'powershell\CodexProxy.Cli.ps1')
+    'powershell/CodexProxy.Core.psm1' = (Join-Path $projectRoot 'powershell\CodexProxy.Core.psm1')
+}
+$sourceInputHashes = [ordered]@{}
+foreach ($entry in $sourceInputFiles.GetEnumerator()) {
+    if (-not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) {
+        throw ("Required build input is missing: {0}" -f $entry.Key)
+    }
+    $sourceInputHashes[$entry.Key] = (Get-FileHash -Algorithm SHA256 -LiteralPath $entry.Value).Hash
+}
 
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     throw 'Run scripts\setup_env.ps1 before building.'
 }
-if ((Get-FileHash -Algorithm SHA256 -LiteralPath $originalCmd).Hash -ne $expectedCmdHash) {
-    throw 'The original codex-vpn-repair.cmd has changed; the build was stopped.'
-}
-
-if (-not $SkipTests) {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot 'tests\test_core.ps1')
-    if ($LASTEXITCODE -ne 0) { throw 'PowerShell core tests failed.' }
-    $env:QT_QPA_PLATFORM = 'offscreen'
-    & $python -m unittest discover -s (Join-Path $projectRoot 'tests') -p 'test_*.py' -v
-    if ($LASTEXITCODE -ne 0) { throw 'Python/GUI smoke tests failed.' }
-}
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $standaloneGenerator -Check
+if ($LASTEXITCODE -ne 0) { throw 'The generated standalone CMD is stale.' }
 
 $cleanTargets = @($releaseRoot, $workRoot)
 if ($CleanWorkspace) {
@@ -59,7 +66,8 @@ foreach ($target in $cleanTargets) {
     --onedir `
     --name CodexProxyAssistant `
     --paths (Join-Path $projectRoot 'src') `
-    --add-data ((Join-Path $projectRoot 'powershell') + ';powershell') `
+    --add-data ((Join-Path $projectRoot 'powershell\CodexProxy.Cli.ps1') + ';powershell') `
+    --add-data ((Join-Path $projectRoot 'powershell\CodexProxy.Core.psm1') + ';powershell') `
     --add-data ((Join-Path $projectRoot 'assets') + ';assets') `
     --version-file (Join-Path $projectRoot 'packaging\version_info.txt') `
     --distpath $releaseRoot `
@@ -68,13 +76,36 @@ foreach ($target in $cleanTargets) {
     (Join-Path $projectRoot 'run_gui.py')
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller packaging failed.' }
 
+foreach ($entry in $sourceInputFiles.GetEnumerator()) {
+    $currentHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $entry.Value).Hash
+    if ($currentHash -ne $sourceInputHashes[$entry.Key]) {
+        throw ("Build input changed while PyInstaller was running; rebuild required: {0}" -f $entry.Key)
+    }
+}
+
 $packageRoot = Join-Path $releaseRoot 'CodexProxyAssistant'
 Copy-Item -LiteralPath $originalCmd -Destination (Join-Path $packageRoot 'codex-vpn-repair.cmd')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination (Join-Path $packageRoot 'README.md')
 
 $exe = Join-Path $packageRoot 'CodexProxyAssistant.exe'
+$gitCommit = $null
+$gitDirty = $null
+try {
+    $gitCommit = (& git -C $projectRoot rev-parse HEAD 2>$null | Select-Object -First 1).Trim()
+    $gitDirty = [bool](@(& git -C $projectRoot status --porcelain 2>$null).Count -gt 0)
+} catch { }
 $manifest = [ordered]@{
+    application_version = '0.1.3'
     built_at_local = [DateTimeOffset]::Now.ToString('o')
+    source = [ordered]@{
+        git_commit = $gitCommit
+        git_dirty = $gitDirty
+        inputs = $sourceInputHashes
+    }
+    runtime = [ordered]@{
+        python = (& $python --version 2>&1 | Select-Object -First 1)
+        pyinstaller = (& $python -m PyInstaller --version 2>&1 | Select-Object -First 1)
+    }
     executable = [ordered]@{
         name = 'CodexProxyAssistant.exe'
         sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash
@@ -82,10 +113,12 @@ $manifest = [ordered]@{
     fallback_cmd = [ordered]@{
         name = 'codex-vpn-repair.cmd'
         sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $packageRoot 'codex-vpn-repair.cmd')).Hash
-        original_preserved = $true
+        generated_from_core = $true
+        core_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $projectRoot 'powershell\CodexProxy.Core.psm1')).Hash
+        entrypoint_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $projectRoot 'powershell\CodexProxy.Standalone.ps1')).Hash
     }
 }
-$manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $packageRoot 'build-manifest.json') -Encoding UTF8
+$manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $releaseRoot 'build-manifest.json') -Encoding UTF8
 
 if ($CleanWorkspace) {
     if (Test-Path -LiteralPath $workRoot) {

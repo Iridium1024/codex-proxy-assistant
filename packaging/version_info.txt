@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(0, 5, 2, 0),
-    prodvers=(0, 5, 2, 0),
+    filevers=(0, 1, 3, 0),
+    prodvers=(0, 1, 3, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -17,11 +17,11 @@ VSVersionInfo(
         [
           StringStruct(u'CompanyName', u'Local Tooling'),
           StringStruct(u'FileDescription', u'Codex 代理诊断与修复'),
-          StringStruct(u'FileVersion', u'0.5.2'),
+          StringStruct(u'FileVersion', u'0.1.3'),
           StringStruct(u'InternalName', u'CodexProxyAssistant'),
           StringStruct(u'OriginalFilename', u'CodexProxyAssistant.exe'),
           StringStruct(u'ProductName', u'Codex 代理诊断与修复'),
-          StringStruct(u'ProductVersion', u'0.5.2')
+          StringStruct(u'ProductVersion', u'0.1.3')
         ]
       )
     ]),
